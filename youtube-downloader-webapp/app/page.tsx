@@ -3,27 +3,31 @@
 import { useState } from 'react';
 import axios from 'axios';
 
-interface VideoInfo {
+interface VideoFormat {
+  quality: string;
+  resolution?: string;
+  fps?: number;
+  size: string;
+  itag: number;
+  container: string;
+  codec?: string;
+}
+
+interface VideoDetails {
   title: string;
   author: string;
+  duration: string;
   thumbnail: string;
-  videoId: string;
-  downloadUrl?: string;
-  alternativeDownloads?: Array<{
-    service: string;
-    url: string;
-  }>;
-  downloadOptions?: Array<{
-    method: string;
-    quality: string;
-    url: string;
-    instructions: string;
-  }>;
-  formats?: Array<{
-    quality: string;
-    url: string;
-    size?: string;
-  }>;
+  description: string;
+}
+
+interface FormatResponse {
+  success: boolean;
+  videoDetails: VideoDetails;
+  formats: {
+    video: VideoFormat[];
+    audio: VideoFormat[];
+  };
 }
 
 export default function Home() {
@@ -31,13 +35,15 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState('');
-  const [videoInfo, setVideoInfo] = useState<VideoInfo | null>(null);
-  const [selectedQuality, setSelectedQuality] = useState('720p');
+  const [videoData, setVideoData] = useState<FormatResponse | null>(null);
+  const [selectedFormat, setSelectedFormat] = useState<VideoFormat | null>(null);
+  const [downloadProgress, setDownloadProgress] = useState(0);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    setVideoInfo(null);
+    setVideoData(null);
+    setSelectedFormat(null);
     
     if (!url.trim()) {
       setError('Please enter a YouTube URL');
@@ -47,96 +53,91 @@ export default function Home() {
     setLoading(true);
     
     try {
-      // Try multiple APIs in order of preference
-      let response;
-      
-      try {
-        // First try the direct download API
-        response = await axios.post('/api/direct-download', { url, quality: selectedQuality });
-        if (response.data.success) {
-          const data = response.data;
-          setVideoInfo({
-            title: data.videoInfo.title,
-            author: data.videoInfo.author,
-            thumbnail: data.videoInfo.thumbnail,
-            videoId: extractVideoId(url) || '',
-            downloadOptions: data.downloadLinks.map((link: any) => ({
-              method: 'external',
-              quality: link.quality || 'Multiple',
-              url: link.url,
-              instructions: `Download via ${link.service}`
-            }))
-          });
-          return;
-        }
-      } catch (err) {
-        console.log('Direct download API failed, trying alternatives...');
-      }
-      
-      // Try the YouTube API
-      try {
-        response = await axios.post('/api/youtube', { url });
-        setVideoInfo(response.data);
-      } catch (err) {
-        // Final fallback
-        response = await axios.post('/api/download', { url });
-        setVideoInfo(response.data);
+      const response = await axios.post('/api/formats', { url });
+      setVideoData(response.data);
+      // Auto-select the highest quality format
+      if (response.data.formats.video.length > 0) {
+        setSelectedFormat(response.data.formats.video[0]);
       }
     } catch (err: any) {
-      setError(err.response?.data?.error || 'Failed to process video. Please try again.');
+      setError(err.response?.data?.error || 'Failed to fetch video information');
     } finally {
       setLoading(false);
     }
   };
-  
-  const extractVideoId = (url: string): string | null => {
-    const patterns = [
-      /(?:youtube\.com\/watch\?v=|youtu\.be\/)([^&\n?#]+)/,
-      /youtube\.com\/embed\/([^&\n?#]+)/,
-      /youtube\.com\/v\/([^&\n?#]+)/
-    ];
+
+  const handleDownload = async () => {
+    if (!selectedFormat || !videoData) return;
     
-    for (const pattern of patterns) {
-      const match = url.match(pattern);
-      if (match) return match[1];
+    setDownloading(true);
+    setDownloadProgress(0);
+    
+    try {
+      // Create download URL
+      const downloadUrl = `/api/stream-video?url=${encodeURIComponent(url)}&quality=${selectedFormat.quality}&format=mp4`;
+      
+      // Create invisible anchor and trigger download
+      const link = document.createElement('a');
+      link.href = downloadUrl;
+      link.download = `${videoData.videoDetails.title}.mp4`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      
+      // Simulate progress (since we can't track real progress with this method)
+      const interval = setInterval(() => {
+        setDownloadProgress(prev => {
+          if (prev >= 90) {
+            clearInterval(interval);
+            return 100;
+          }
+          return prev + 10;
+        });
+      }, 500);
+      
+      setTimeout(() => {
+        setDownloadProgress(100);
+        clearInterval(interval);
+      }, 5000);
+    } catch (err) {
+      setError('Download failed. Please try again.');
+    } finally {
+      setTimeout(() => {
+        setDownloading(false);
+        setDownloadProgress(0);
+      }, 1000);
     }
-    
-    return null;
   };
 
-  const handleDirectDownload = async (downloadUrl?: string) => {
-    if (!videoInfo) return;
+  const handleAudioDownload = async () => {
+    if (!videoData) return;
     
     setDownloading(true);
     
     try {
-      if (downloadUrl) {
-        // Direct download URL available
-        window.open(downloadUrl, '_blank');
-      } else {
-        // Use proxy download
-        window.open(`/api/proxy-download?v=${videoInfo.videoId}&quality=${selectedQuality}`, '_blank');
-      }
+      const downloadUrl = `/api/stream-video?url=${encodeURIComponent(url)}&format=mp3`;
+      const link = document.createElement('a');
+      link.href = downloadUrl;
+      link.download = `${videoData.videoDetails.title}.mp3`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
     } catch (err) {
-      setError('Download failed. Please try an alternative method.');
+      setError('Audio download failed.');
     } finally {
-      setDownloading(false);
+      setTimeout(() => setDownloading(false), 1000);
     }
   };
 
-  const handleAlternativeDownload = (url: string) => {
-    window.open(url, '_blank');
-  };
-
   return (
-    <main className="min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 text-white">
+    <main className="min-h-screen bg-gradient-to-br from-gray-900 via-purple-900 to-gray-900 text-white">
       <div className="container mx-auto px-4 py-16">
-        <div className="max-w-4xl mx-auto">
-          <h1 className="text-5xl font-bold text-center mb-2 bg-gradient-to-r from-red-500 to-pink-500 bg-clip-text text-transparent">
-            YouTube Video Downloader
+        <div className="max-w-5xl mx-auto">
+          <h1 className="text-6xl font-bold text-center mb-4 bg-gradient-to-r from-purple-400 to-pink-600 bg-clip-text text-transparent">
+            YouTube Direct Downloader
           </h1>
-          <p className="text-center text-gray-400 mb-12">
-            Download YouTube videos directly in MP4 format
+          <p className="text-center text-gray-300 mb-12 text-lg">
+            Download YouTube videos directly - No third-party sites required
           </p>
 
           <form onSubmit={handleSubmit} className="mb-12">
@@ -146,12 +147,12 @@ export default function Home() {
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
                 placeholder="Paste YouTube URL here..."
-                className="flex-1 px-6 py-4 rounded-lg bg-gray-800 border border-gray-700 focus:border-red-500 focus:outline-none transition-colors"
+                className="flex-1 px-6 py-4 rounded-xl bg-gray-800/50 backdrop-blur-sm border border-gray-700 focus:border-purple-500 focus:outline-none transition-all"
               />
               <button
                 type="submit"
                 disabled={loading}
-                className="px-8 py-4 bg-gradient-to-r from-red-500 to-pink-500 rounded-lg font-semibold hover:from-red-600 hover:to-pink-600 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg hover:shadow-xl"
+                className="px-10 py-4 bg-gradient-to-r from-purple-500 to-pink-500 rounded-xl font-semibold hover:from-purple-600 hover:to-pink-600 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg hover:shadow-xl transform hover:scale-105"
               >
                 {loading ? (
                   <span className="flex items-center gap-2">
@@ -159,7 +160,7 @@ export default function Home() {
                       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
                       <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
                     </svg>
-                    Processing...
+                    Fetching...
                   </span>
                 ) : (
                   'Get Video'
@@ -169,111 +170,128 @@ export default function Home() {
           </form>
 
           {error && (
-            <div className="mb-8 p-4 bg-red-500/20 border border-red-500 rounded-lg text-red-400">
+            <div className="mb-8 p-4 bg-red-500/20 backdrop-blur-sm border border-red-500 rounded-xl text-red-300">
               {error}
             </div>
           )}
 
-          {videoInfo && (
-            <div className="bg-gray-800/50 backdrop-blur-sm rounded-xl p-8 shadow-2xl border border-gray-700">
-              <div className="grid md:grid-cols-2 gap-8">
+          {videoData && videoData.success && (
+            <div className="bg-gray-800/30 backdrop-blur-md rounded-2xl p-8 shadow-2xl border border-gray-700">
+              <div className="grid md:grid-cols-2 gap-8 mb-8">
                 <div>
                   <img
-                    src={videoInfo.thumbnail}
-                    alt={videoInfo.title}
-                    className="w-full rounded-lg shadow-lg"
+                    src={videoData.videoDetails.thumbnail}
+                    alt={videoData.videoDetails.title}
+                    className="w-full rounded-xl shadow-lg"
                   />
                 </div>
-                <div className="flex flex-col justify-between">
-                  <div>
-                    <h2 className="text-2xl font-bold mb-2">{videoInfo.title}</h2>
-                    <p className="text-gray-400 mb-6">by {videoInfo.author}</p>
-                  </div>
-                  
-                  <div className="space-y-4">
-                    <h3 className="text-lg font-semibold mb-3">Download Options:</h3>
-                    
-                    {/* Quality selector */}
-                    <div className="mb-4">
-                      <label className="block text-sm font-medium mb-2">Select Quality:</label>
-                      <select
-                        value={selectedQuality}
-                        onChange={(e) => setSelectedQuality(e.target.value)}
-                        className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:border-red-500"
+                <div>
+                  <h2 className="text-2xl font-bold mb-2">{videoData.videoDetails.title}</h2>
+                  <p className="text-gray-300 mb-2">by {videoData.videoDetails.author}</p>
+                  <p className="text-gray-400 mb-4">Duration: {videoData.videoDetails.duration}</p>
+                  <p className="text-gray-400 text-sm mb-6">{videoData.videoDetails.description}</p>
+                </div>
+              </div>
+
+              <div className="space-y-6">
+                {/* Video formats section */}
+                <div>
+                  <h3 className="text-xl font-semibold mb-4 text-purple-300">Video Formats</h3>
+                  <div className="grid gap-3">
+                    {videoData.formats.video.map((format) => (
+                      <div
+                        key={format.itag}
+                        className={`p-4 rounded-lg border cursor-pointer transition-all ${
+                          selectedFormat?.itag === format.itag
+                            ? 'bg-purple-600/30 border-purple-500'
+                            : 'bg-gray-700/30 border-gray-600 hover:border-purple-400'
+                        }`}
+                        onClick={() => setSelectedFormat(format)}
                       >
-                        <option value="1080p">1080p HD</option>
-                        <option value="720p">720p HD</option>
-                        <option value="480p">480p</option>
-                        <option value="360p">360p</option>
-                      </select>
-                    </div>
-
-                    {/* Direct download button */}
-                    <button
-                      onClick={() => handleDirectDownload(videoInfo.downloadUrl)}
-                      disabled={downloading}
-                      className="w-full px-6 py-3 bg-green-600 hover:bg-green-700 rounded-lg font-medium transition-colors shadow-lg hover:shadow-xl disabled:opacity-50"
-                    >
-                      {downloading ? 'Processing...' : 'Download MP4 (Direct)'}
-                    </button>
-
-                    {/* Alternative download options */}
-                    {videoInfo.downloadOptions && videoInfo.downloadOptions.length > 0 && (
-                      <div className="space-y-2">
-                        <p className="text-sm text-gray-400">Alternative methods:</p>
-                        {videoInfo.downloadOptions.map((option, index) => (
-                          <button
-                            key={index}
-                            onClick={() => handleAlternativeDownload(option.url)}
-                            className="w-full px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm transition-colors"
-                          >
-                            {option.instructions} ({option.quality})
-                          </button>
-                        ))}
+                        <div className="flex justify-between items-center">
+                          <div>
+                            <span className="font-semibold">{format.quality}</span>
+                            <span className="text-gray-400 ml-2">({format.resolution})</span>
+                            <span className="text-gray-500 ml-2 text-sm">{format.fps}fps</span>
+                          </div>
+                          <div className="text-right">
+                            <span className="text-gray-300">{format.size}</span>
+                            <span className="text-gray-500 ml-2 text-sm">{format.container}</span>
+                          </div>
+                        </div>
                       </div>
-                    )}
+                    ))}
+                  </div>
+                </div>
 
-                    {/* Fallback download options */}
-                    {videoInfo.alternativeDownloads && (
-                      <div className="space-y-2 mt-4">
-                        <p className="text-sm text-gray-400">External downloaders:</p>
-                        {videoInfo.alternativeDownloads.map((alt, index) => (
-                          <button
-                            key={index}
-                            onClick={() => handleAlternativeDownload(alt.url)}
-                            className="w-full px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg text-sm transition-colors"
-                          >
-                            Download via {alt.service}
-                          </button>
-                        ))}
-                      </div>
+                {/* Download buttons */}
+                <div className="flex flex-col sm:flex-row gap-4">
+                  <button
+                    onClick={handleDownload}
+                    disabled={!selectedFormat || downloading}
+                    className="flex-1 px-6 py-4 bg-gradient-to-r from-green-500 to-emerald-500 rounded-xl font-semibold hover:from-green-600 hover:to-emerald-600 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg hover:shadow-xl transform hover:scale-105"
+                  >
+                    {downloading ? (
+                      <span className="flex items-center justify-center gap-2">
+                        <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                        </svg>
+                        Downloading... {downloadProgress > 0 && `${downloadProgress}%`}
+                      </span>
+                    ) : (
+                      'Download Video (MP4)'
                     )}
+                  </button>
+                  
+                  <button
+                    onClick={handleAudioDownload}
+                    disabled={downloading}
+                    className="px-6 py-4 bg-gradient-to-r from-blue-500 to-indigo-500 rounded-xl font-semibold hover:from-blue-600 hover:to-indigo-600 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg hover:shadow-xl transform hover:scale-105"
+                  >
+                    Download Audio (MP3)
+                  </button>
+                </div>
 
-                    {/* Available formats */}
-                    {videoInfo.formats && videoInfo.formats.length > 0 && (
-                      <div className="space-y-2 mt-4">
-                        <p className="text-sm text-gray-400">Available formats:</p>
-                        {videoInfo.formats.map((format, index) => (
-                          <button
-                            key={index}
-                            onClick={() => handleDirectDownload(format.url)}
-                            className="w-full px-4 py-2 bg-purple-600 hover:bg-purple-700 rounded-lg text-sm transition-colors"
-                          >
-                            {format.quality} {format.size && `(${format.size})`}
-                          </button>
-                        ))}
+                {/* Progress bar */}
+                {downloading && downloadProgress > 0 && (
+                  <div className="w-full bg-gray-700 rounded-full h-2 overflow-hidden">
+                    <div 
+                      className="bg-gradient-to-r from-purple-500 to-pink-500 h-full transition-all duration-500"
+                      style={{ width: `${downloadProgress}%` }}
+                    />
+                  </div>
+                )}
+
+                {/* Audio formats section */}
+                <div className="mt-6">
+                  <h3 className="text-lg font-semibold mb-3 text-blue-300">Audio Only Formats</h3>
+                  <div className="grid gap-2">
+                    {videoData.formats.audio.slice(0, 3).map((format, index) => (
+                      <div
+                        key={format.itag}
+                        className="p-3 rounded-lg bg-gray-700/30 border border-gray-600 text-sm"
+                      >
+                        <div className="flex justify-between items-center">
+                          <span>Audio {format.quality}</span>
+                          <span className="text-gray-400">{format.size}</span>
+                        </div>
                       </div>
-                    )}
+                    ))}
                   </div>
                 </div>
               </div>
             </div>
           )}
 
-          <div className="mt-16 text-center text-gray-500 text-sm">
-            <p className="mb-2">⚠️ Important: Respect copyright laws and YouTube\'s Terms of Service</p>
-            <p>Only download videos you have permission to download</p>
-            <p className="mt-4 text-xs">This tool provides multiple download methods to ensure reliability</p>
+          <div className="mt-16 text-center text-gray-400 text-sm">
+            <p className="mb-2">✨ Direct download from YouTube servers</p>
+            <p className="mb-2">🚀 No third-party sites or redirects</p>
+            <p className="mb-4">🔒 Secure and private downloading</p>
+            <div className="border-t border-gray-700 pt-4 mt-4">
+              <p className="text-gray-500">⚠️ Please respect copyright laws and YouTube\'s Terms of Service</p>
+              <p className="text-gray-500">Only download videos you have permission to download</p>
+            </div>
           </div>
         </div>
       </div>
