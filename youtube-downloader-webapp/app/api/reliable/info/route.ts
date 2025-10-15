@@ -8,16 +8,41 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'URL is required' }, { status: 400 });
     }
 
+    console.log('Processing URL:', url);
+
     // Extract video ID
     const videoId = extractVideoId(url);
     if (!videoId) {
-      return NextResponse.json({ error: 'Invalid YouTube URL' }, { status: 400 });
+      console.error('Failed to extract video ID from URL:', url);
+      return NextResponse.json({ 
+        error: 'Invalid YouTube URL. Please make sure you\'re using a valid YouTube video link.',
+        supportedFormats: [
+          'https://www.youtube.com/watch?v=VIDEO_ID',
+          'https://youtu.be/VIDEO_ID',
+          'https://youtube.com/shorts/VIDEO_ID',
+          'https://m.youtube.com/watch?v=VIDEO_ID'
+        ]
+      }, { status: 400 });
     }
+    
+    console.log('Extracted video ID:', videoId);
 
     // Get basic video info using YouTube oEmbed API (always works)
     const oembedUrl = `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`;
     const oembedResponse = await fetch(oembedUrl);
-    const oembedData = await oembedResponse.json();
+    
+    if (!oembedResponse.ok) {
+      console.error('oEmbed API failed:', oembedResponse.status, oembedResponse.statusText);
+      // Continue with basic info even if oEmbed fails
+    }
+    
+    let oembedData: any = {};
+    try {
+      oembedData = await oembedResponse.json();
+    } catch (e) {
+      console.error('Failed to parse oEmbed response:', e);
+      // Continue with default values
+    }
 
     // Prepare response with reliable download options
     return NextResponse.json({
@@ -105,17 +130,41 @@ export async function POST(request: NextRequest) {
 }
 
 function extractVideoId(url: string): string | null {
+  // Clean the URL
+  url = url.trim();
+  
   const patterns = [
+    // Standard watch URLs
     /(?:youtube\.com\/watch\?v=|youtu\.be\/)([^&\n?#]+)/,
+    // Embed URLs
     /youtube\.com\/embed\/([^&\n?#]+)/,
-    /youtube\.com\/v\/([^&\n?#]+)/
+    // Short URLs with /v/
+    /youtube\.com\/v\/([^&\n?#]+)/,
+    // YouTube Shorts
+    /youtube\.com\/shorts\/([^&\n?#]+)/,
+    // Mobile URLs
+    /m\.youtube\.com\/watch\?v=([^&\n?#]+)/,
+    // YouTube Music
+    /music\.youtube\.com\/watch\?v=([^&\n?#]+)/
   ];
   
   for (const pattern of patterns) {
     const match = url.match(pattern);
-    if (match) {
-      return match[1];
+    if (match && match[1]) {
+      // Clean the video ID (remove any query parameters that might be attached)
+      return match[1].split('?')[0];
     }
+  }
+  
+  // Try to extract ID from URL parameters if it's a different format
+  try {
+    const urlObj = new URL(url);
+    const videoId = urlObj.searchParams.get('v');
+    if (videoId) {
+      return videoId;
+    }
+  } catch (e) {
+    // URL parsing failed, continue with other methods
   }
   
   return null;
