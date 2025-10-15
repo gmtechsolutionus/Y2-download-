@@ -1,6 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server';
-import ytdl from 'ytdl-core';
-import { Readable } from 'stream';
 
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
@@ -12,68 +10,39 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'URL is required' }, { status: 400 });
   }
 
-  if (!ytdl.validateURL(url)) {
+  // Extract video ID
+  const videoId = extractVideoId(url);
+  if (!videoId) {
     return NextResponse.json({ error: 'Invalid YouTube URL' }, { status: 400 });
   }
 
-  try {
-    // Get video info first
-    const info = await ytdl.getInfo(url);
-    const videoTitle = info.videoDetails.title;
-    
-    // Set up quality options
-    let qualityOption: ytdl.downloadOptions['quality'] = 'highest';
-    
-    if (quality === '1080p') {
-      qualityOption = 'highestvideo';
-    } else if (quality === '720p') {
-      qualityOption = '22'; // iTunes 720p
-    } else if (quality === '480p') {
-      qualityOption = '135'; // 480p
-    } else if (quality === '360p') {
-      qualityOption = '18'; // 360p
-    }
-    
-    // Create the download stream
-    const videoStream = ytdl(url, {
-      quality: qualityOption,
-      filter: format === 'mp3' ? 'audioonly' : 'audioandvideo',
-    });
+  // Redirect to external download service
+  const qualityMap: { [key: string]: string } = {
+    '1080p': 'https://www.y2mate.com/youtube/',
+    '720p': 'https://en.savefrom.net/1-youtube-video-downloader-',
+    '480p': 'https://www.ssyoutube.com/watch?v=',
+    '360p': 'https://9xbuddy.in/process?url=https://www.youtube.com/watch?v='
+  };
 
-    // Handle stream errors
-    videoStream.on('error', (error) => {
-      console.error('Stream error:', error);
-    });
+  const baseUrl = qualityMap[quality] || qualityMap['720p'];
+  const redirectUrl = baseUrl.includes('9xbuddy') ? baseUrl + videoId : baseUrl + videoId;
 
-    // Convert to web stream
-    const webStream = Readable.toWeb(videoStream as any);
-    
-    // Set headers for download
-    const headers = new Headers();
-    const extension = format === 'mp3' ? 'mp3' : 'mp4';
-    const mimeType = format === 'mp3' ? 'audio/mpeg' : 'video/mp4';
-    
-    headers.set('Content-Type', mimeType);
-    headers.set('Content-Disposition', `attachment; filename="${sanitizeFilename(videoTitle)}.${extension}"`);
-    headers.set('Cache-Control', 'no-cache');
-    
-    return new NextResponse(webStream as any, {
-      headers,
-      status: 200
-    });
-  } catch (error) {
-    console.error('Streaming error:', error);
-    return NextResponse.json({ 
-      error: 'Failed to stream video',
-      message: error instanceof Error ? error.message : 'Unknown error'
-    }, { status: 500 });
-  }
+  return NextResponse.redirect(redirectUrl);
 }
 
-function sanitizeFilename(filename: string): string {
-  // Remove special characters and limit length
-  return filename
-    .replace(/[^\w\s-]/gi, '')
-    .trim()
-    .substring(0, 100);
+function extractVideoId(url: string): string | null {
+  const patterns = [
+    /(?:youtube\.com\/watch\?v=|youtu\.be\/)([^&\n?#]+)/,
+    /youtube\.com\/embed\/([^&\n?#]+)/,
+    /youtube\.com\/v\/([^&\n?#]+)/
+  ];
+  
+  for (const pattern of patterns) {
+    const match = url.match(pattern);
+    if (match) {
+      return match[1];
+    }
+  }
+  
+  return null;
 }
