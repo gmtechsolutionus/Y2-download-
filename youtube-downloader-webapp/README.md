@@ -1,14 +1,17 @@
 # YouTube Video Downloader
 
-A simple web application to download YouTube videos by pasting the URL.
+A powerful web application to download YouTube videos directly in MP4 format.
 
 ## Features
 
-- Clean and modern UI
-- Paste YouTube URL to get video information
-- Download videos in MP4 format
-- Responsive design
-- Built with Next.js and TypeScript
+- Clean and modern UI with gradient design
+- Direct MP4 download functionality
+- Multiple quality options (1080p, 720p, 480p, 360p)
+- Multiple download methods for reliability
+- Real-time video information display
+- Error handling and loading states
+- Responsive design for all devices
+- Built with Next.js 14 and TypeScript
 
 ## Tech Stack
 

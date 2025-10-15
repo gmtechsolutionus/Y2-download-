@@ -8,18 +8,31 @@ interface VideoInfo {
   author: string;
   thumbnail: string;
   videoId: string;
-  downloadLinks: Array<{
-    quality: string;
-    format: string;
+  downloadUrl?: string;
+  alternativeDownloads?: Array<{
+    service: string;
     url: string;
+  }>;
+  downloadOptions?: Array<{
+    method: string;
+    quality: string;
+    url: string;
+    instructions: string;
+  }>;
+  formats?: Array<{
+    quality: string;
+    url: string;
+    size?: string;
   }>;
 }
 
 export default function Home() {
   const [url, setUrl] = useState('');
   const [loading, setLoading] = useState(false);
+  const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState('');
   const [videoInfo, setVideoInfo] = useState<VideoInfo | null>(null);
+  const [selectedQuality, setSelectedQuality] = useState('720p');
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -34,19 +47,85 @@ export default function Home() {
     setLoading(true);
     
     try {
-      const response = await axios.post('/api/download', { url });
-      setVideoInfo(response.data);
+      // Try multiple APIs in order of preference
+      let response;
+      
+      try {
+        // First try the direct download API
+        response = await axios.post('/api/direct-download', { url, quality: selectedQuality });
+        if (response.data.success) {
+          const data = response.data;
+          setVideoInfo({
+            title: data.videoInfo.title,
+            author: data.videoInfo.author,
+            thumbnail: data.videoInfo.thumbnail,
+            videoId: extractVideoId(url) || '',
+            downloadOptions: data.downloadLinks.map((link: any) => ({
+              method: 'external',
+              quality: link.quality || 'Multiple',
+              url: link.url,
+              instructions: `Download via ${link.service}`
+            }))
+          });
+          return;
+        }
+      } catch (err) {
+        console.log('Direct download API failed, trying alternatives...');
+      }
+      
+      // Try the YouTube API
+      try {
+        response = await axios.post('/api/youtube', { url });
+        setVideoInfo(response.data);
+      } catch (err) {
+        // Final fallback
+        response = await axios.post('/api/download', { url });
+        setVideoInfo(response.data);
+      }
     } catch (err: any) {
-      setError(err.response?.data?.error || 'Failed to process video');
+      setError(err.response?.data?.error || 'Failed to process video. Please try again.');
     } finally {
       setLoading(false);
     }
   };
+  
+  const extractVideoId = (url: string): string | null => {
+    const patterns = [
+      /(?:youtube\.com\/watch\?v=|youtu\.be\/)([^&\n?#]+)/,
+      /youtube\.com\/embed\/([^&\n?#]+)/,
+      /youtube\.com\/v\/([^&\n?#]+)/
+    ];
+    
+    for (const pattern of patterns) {
+      const match = url.match(pattern);
+      if (match) return match[1];
+    }
+    
+    return null;
+  };
 
-  const handleDownload = async (videoId: string) => {
-    // Open YouTube video in new tab for manual download
-    // Note: Direct downloading requires server-side processing which has limitations on Vercel
-    window.open(`https://www.ssyoutube.com/watch?v=${videoId}`, '_blank');
+  const handleDirectDownload = async (downloadUrl?: string) => {
+    if (!videoInfo) return;
+    
+    setDownloading(true);
+    
+    try {
+      if (downloadUrl) {
+        // Direct download URL available
+        window.open(downloadUrl, '_blank');
+      } else {
+        // Use proxy download
+        window.open(`/api/proxy-download?v=${videoInfo.videoId}&quality=${selectedQuality}`, '_blank');
+      }
+    } catch (err) {
+      setError('Download failed. Please try an alternative method.');
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  const handleAlternativeDownload = (url: string) => {
+    window.open(url, '_blank');
   };
 
   return (
@@ -57,7 +136,7 @@ export default function Home() {
             YouTube Video Downloader
           </h1>
           <p className="text-center text-gray-400 mb-12">
-            Download YouTube videos easily by pasting the URL below
+            Download YouTube videos directly in MP4 format
           </p>
 
           <form onSubmit={handleSubmit} className="mb-12">
@@ -111,17 +190,80 @@ export default function Home() {
                     <p className="text-gray-400 mb-6">by {videoInfo.author}</p>
                   </div>
                   
-                  <div className="space-y-3">
-                    <h3 className="text-lg font-semibold mb-2">Download Options:</h3>
+                  <div className="space-y-4">
+                    <h3 className="text-lg font-semibold mb-3">Download Options:</h3>
+                    
+                    {/* Quality selector */}
+                    <div className="mb-4">
+                      <label className="block text-sm font-medium mb-2">Select Quality:</label>
+                      <select
+                        value={selectedQuality}
+                        onChange={(e) => setSelectedQuality(e.target.value)}
+                        className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:border-red-500"
+                      >
+                        <option value="1080p">1080p HD</option>
+                        <option value="720p">720p HD</option>
+                        <option value="480p">480p</option>
+                        <option value="360p">360p</option>
+                      </select>
+                    </div>
+
+                    {/* Direct download button */}
                     <button
-                      onClick={() => handleDownload(videoInfo.videoId)}
-                      className="w-full px-6 py-3 bg-green-600 hover:bg-green-700 rounded-lg font-medium transition-colors shadow-lg hover:shadow-xl"
+                      onClick={() => handleDirectDownload(videoInfo.downloadUrl)}
+                      disabled={downloading}
+                      className="w-full px-6 py-3 bg-green-600 hover:bg-green-700 rounded-lg font-medium transition-colors shadow-lg hover:shadow-xl disabled:opacity-50"
                     >
-                      Download Video (MP4)
+                      {downloading ? 'Processing...' : 'Download MP4 (Direct)'}
                     </button>
-                    <p className="text-sm text-gray-400 text-center">
-                      Click to open download page in new tab
-                    </p>
+
+                    {/* Alternative download options */}
+                    {videoInfo.downloadOptions && videoInfo.downloadOptions.length > 0 && (
+                      <div className="space-y-2">
+                        <p className="text-sm text-gray-400">Alternative methods:</p>
+                        {videoInfo.downloadOptions.map((option, index) => (
+                          <button
+                            key={index}
+                            onClick={() => handleAlternativeDownload(option.url)}
+                            className="w-full px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm transition-colors"
+                          >
+                            {option.instructions} ({option.quality})
+                          </button>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Fallback download options */}
+                    {videoInfo.alternativeDownloads && (
+                      <div className="space-y-2 mt-4">
+                        <p className="text-sm text-gray-400">External downloaders:</p>
+                        {videoInfo.alternativeDownloads.map((alt, index) => (
+                          <button
+                            key={index}
+                            onClick={() => handleAlternativeDownload(alt.url)}
+                            className="w-full px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg text-sm transition-colors"
+                          >
+                            Download via {alt.service}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Available formats */}
+                    {videoInfo.formats && videoInfo.formats.length > 0 && (
+                      <div className="space-y-2 mt-4">
+                        <p className="text-sm text-gray-400">Available formats:</p>
+                        {videoInfo.formats.map((format, index) => (
+                          <button
+                            key={index}
+                            onClick={() => handleDirectDownload(format.url)}
+                            className="w-full px-4 py-2 bg-purple-600 hover:bg-purple-700 rounded-lg text-sm transition-colors"
+                          >
+                            {format.quality} {format.size && `(${format.size})`}
+                          </button>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -129,8 +271,9 @@ export default function Home() {
           )}
 
           <div className="mt-16 text-center text-gray-500 text-sm">
-            <p className="mb-2">⚠️ Important: Respect copyright laws and YouTube's Terms of Service</p>
+            <p className="mb-2">⚠️ Important: Respect copyright laws and YouTube\'s Terms of Service</p>
             <p>Only download videos you have permission to download</p>
+            <p className="mt-4 text-xs">This tool provides multiple download methods to ensure reliability</p>
           </div>
         </div>
       </div>
